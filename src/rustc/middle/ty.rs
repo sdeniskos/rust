@@ -147,6 +147,7 @@ export item_path_str;
 export ast_ty_to_ty_cache_entry;
 export atttce_unresolved, atttce_resolved;
 export mach_sty;
+export normalize_ty;
 
 // Data types
 
@@ -2640,6 +2641,13 @@ fn ty_params_to_tys(tcx: ty::ctxt, tps: [ast::ty_param]) -> [t] {
                 ty::mk_param(tcx, i, ast_util::local_def(tps[i].id))
         })
 }
+
+#[doc = "Returns an equivalent type with all the typedefs removed"]
+fn normalize_ty(cx: ctxt, t: t) -> t {
+    let sty = fold_sty(get(t).struct) {|t| normalize_ty(cx, t) };
+    mk_t(cx, sty)
+}
+
 // Local Variables:
 // mode: rust
 // fill-column: 78;

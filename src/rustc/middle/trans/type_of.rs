@@ -7,6 +7,11 @@ import std::map::hashmap;
 
 import ty::*;
 
+export type_of;
+export type_of_explicit_args;
+export type_of_fn_from_ty;
+export type_of_fn;
+
 fn type_of_explicit_args(cx: @crate_ctxt, inputs: [ty::arg]) -> [TypeRef] {
     vec::map(inputs) {|arg|
         let arg_ty = arg.ty;
@@ -39,9 +44,19 @@ fn type_of_fn_from_ty(cx: @crate_ctxt, fty: ty::t) -> TypeRef {
 
 fn type_of(cx: @crate_ctxt, t: ty::t) -> TypeRef {
     assert !ty::type_has_vars(t);
-    // Check the cache.
 
+    #debug("type_of %?: %?", t, ty::get(t));
+
+    // Replace any typedef'd types with their equivalent non-typedef
+    // type. This ensures that all LLVM nominal types that contain
+    // Rust types are defined as the same LLVM types.  If we don't do
+    // this then, e.g. `option<{myfield: bool}>` would be a different
+    // type than `option<myrec>`.
+    let t = ty::normalize_ty(cx.tcx, t);
+
+    // Check the cache.
     if cx.lltypes.contains_key(t) { ret cx.lltypes.get(t); }
+
     let llty = alt ty::get(t).struct {
       ty::ty_nil | ty::ty_bot { T_nil() }
       ty::ty_bool { T_bool() }
@@ -121,11 +136,40 @@ fn type_of(cx: @crate_ctxt, t: ty::t) -> TypeRef {
     ret llty;
 }
 
+// This should only be called from type_of, above, because it
+// creates new llvm named struct types lazily that are then
+// cached by type_of
 fn type_of_enum(cx: @crate_ctxt, did: ast::def_id, t: ty::t)
     -> TypeRef {
-    let degen = (*ty::enum_variants(cx.tcx, did)).len() == 1u;
-    let size = shape::static_size_of_enum(cx, t);
-    if !degen { T_enum(cx, size) }
-    else if size == 0u { T_struct([T_enum_variant(cx)]) }
-    else { T_array(T_i8(), size) }
+
+    #debug("type_of_enum %?: %?", t, ty::get(t));
+
+    // Every enum type has a unique name. When we find our roots
+    // for GC and unwinding we will use this name to rediscover
+    // the Rust type
+    let name = #fmt(
+        "enum %s (type %s) in crate #%d",
+        ty::item_path_str(cx.tcx, did),
+        util::ppaux::ty_to_str(cx.tcx, t),
+        did.crate
+    );
+
+    let named_llty = common::T_named_struct(name);
+
+    let lltys = {
+        let degen = (*ty::enum_variants(cx.tcx, did)).len() == 1u;
+        let size = shape::static_size_of_enum(cx, t);
+        if !degen {
+            [T_enum_variant(cx), T_array(T_i8(), size)]
+        }
+        else if size == 0u {
+            [T_enum_variant(cx)]
+        }
+        else {
+            [T_array(T_i8(), size)]
+        }
+    };
+
+    common::set_struct_body(named_llty, lltys);
+    ret named_llty;
 }
